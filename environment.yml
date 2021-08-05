@@ -1,0 +1,27 @@
+name: null
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - certifi=2021.5.30=py36ha15d459_0
+  - intel-openmp=2021.3.0=h57928b3_3372
+  - libblas=3.9.0=10_mkl
+  - libcblas=3.9.0=10_mkl
+  - liblapack=3.9.0=10_mkl
+  - mkl=2021.3.0=hb70f87d_564
+  - numpy=1.19.5=py36h4b40d73_2
+  - pandas=0.25.3=py36he350917_0
+  - pip=21.2.2=pyhd8ed1ab_0
+  - python=3.6.13=h39d44d4_0_cpython
+  - python-dateutil=2.8.2=pyhd8ed1ab_0
+  - python_abi=3.6=2_cp36m
+  - pytz=2021.1=pyhd8ed1ab_0
+  - setuptools=49.6.0=py36ha15d459_3
+  - six=1.16.0=pyh6c4a22f_0
+  - tbb=2021.3.0=h2d74725_0
+  - ucrt=10.0.20348.0=h57928b3_0
+  - vc=14.2=hb210afc_5
+  - vs2015_runtime=14.29.30037=h902a5da_5
+  - wheel=0.36.2=pyhd3deb0d_0
+  - wincertstore=0.2=py36ha15d459_1006
+prefix: F:\Documents\WoWAH\renv\python\condaenvs\renv-python

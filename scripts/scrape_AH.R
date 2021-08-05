@@ -3,8 +3,9 @@ library(jsonlite)
 library(tidyverse)
 library(curlconverter)
 library(glue)
+Sys.time()
 
-source(here::here("keys.R"))
+source("C:/Users/wittm094/Documents/WoWAH/data/keys.R")
 
 curl_request <- glue("curl -u {client_id}:{client_secret} -d grant_type=client_credentials https://us.battle.net/oauth/token")
 
@@ -34,8 +35,8 @@ lapply(realm_names, function(.x) {
 realm_name <- "malfurion"
 specific_realm <- GET(glue("https://us.api.blizzard.com/data/wow/search/connected-realm?namespace=dynamic-us&realms.name.en_US={realm_name}&access_token={token}"))
 results <- fromJSON(content(specific_realm, as = "text"))
-results$results$data$realms[[1]]$id
-results$results$data$realms[[1]]$name$en_US
+# results$results$data$realms[[1]]$id
+# results$results$data$realms[[1]]$name$en_US
 
 
 
@@ -48,10 +49,17 @@ id <- 1175
 
 AH_request <- GET(glue("https://us.api.blizzard.com/data/wow/connected-realm/{id}/auctions?namespace=dynamic-us&locale=en_US&access_token={token}"))
 AH_content <- fromJSON(content(AH_request, as = "text"))
-# Create df of auction data
-AH_df <- as_tibble(AH_content$auctions$item) %>% 
-   mutate(id = as.character(id))
+# Create df of auction data8
+AH_df <- as_tibble(AH_content$auctions) %>% 
+   mutate(id_c = as.character(item$id),
+          item_id = as.integer(item$id),
+          date_time = Sys.time()) %>% 
+   select(-item)
 
+write_csv(AH_df, "C:/Users/wittm094/Documents/WoWAH/data/AH_data.csv",
+          append = TRUE,
+          col_names = TRUE)
 
-
-
+googledrive::drive_upload("C:/Users/wittm094/Documents/WoWAH/data/AH_data.csv",
+                          path = "WoWAH/data/AH_data.csv",
+                          overwrite = TRUE)

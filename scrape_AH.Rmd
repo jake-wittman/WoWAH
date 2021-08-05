@@ -1,0 +1,158 @@
+---
+title: "Untitled"
+author: "Jake Wittman"
+date: "8/4/2021"
+output: html_document
+---
+```{r}
+Sys.time()
+
+# R imports
+.libPaths("F:/Documents/WoWAH/renv/library/R-4.0/x86_64-w64-mingw32")
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(glue)
+library(googledrive)
+library(reticulate)
+use_condaenv("F:\\Documents\\WoWAH\\renv\\python\\condaenvs\\renv-python\\python.exe")
+
+
+source("F:/Documents/WoWAH/data/keys.R")
+
+```
+
+```{python}
+# Set up python functions
+import requests
+from datetime import datetime
+import pandas as pd
+
+# Create a new access token
+def create_access_token(client_id, client_secret, region = "us"):
+   data = { 'grant_type': 'client_credentials' }
+   response = requests.post('https://%s.battle.net/oauth/token' % region,
+                            data = data,
+                            auth = (client_id, client_secret))
+   return response.json()
+
+# Get Malf and connected realms data
+def get_malfurion(search):
+   search = search
+   response = requests.get(search)
+   return response.json()["auctions"]
+```
+
+```{python}
+response = create_access_token(r['client_id'], r['client_secret'])
+token = response['access_token']
+```
+
+```{r}
+# Set up search query with Malfurion realm ID
+id <- 1175
+token <- py$token
+search <- glue("https://us.api.blizzard.com/data/wow/connected-realm/{id}/auctions?namespace=dynamic-us&locale=en_US&access_token={token}")
+```
+
+```{python}
+auction_data = get_malfurion(r['search'])
+auction_data = pd.DataFrame(auction_data)
+# Expand the item column
+auction_data = auction_data.rename(columns={"id": "auction_id",})
+auction_data = pd.concat([auction_data.drop(['item'], axis=1), auction_data['item'].apply(pd.Series)], axis=1)
+
+# Drop 'bonus_list' and 'modifiers' 
+#   These are subgroups of an equipable item with the bonus stats (intellect agility, strength, etc)
+auction_data['collection_year'] = datetime.now().strftime('%Y')
+auction_data['collection_month'] = datetime.now().strftime('%m')
+auction_data['collection_day'] = datetime.now().strftime('%d')
+auction_data['collection_hour'] = datetime.now().strftime('%H')
+filename = datetime.now().strftime('F:/Documents/WoWAH/data/Malfurion_NA-%Y-%m-%d-%H-%M.csv')
+tablename = datetime.now().strftime('Malfurion_NA-%Y-%m-%d-%H-%M')
+auction_data.to_csv(filename, index = False)
+```
+
+```{r}
+# Read the data into R to clean it a bit more (since I'm less good at cleaning)
+# in python
+auction_df <- read_csv(py$filename)
+
+# Unit prices are for stackable items 
+auction_df <- auction_df %>% 
+   mutate(unit_price = replace_na(unit_price, 0),
+          buyout = replace_na(buyout, 0),
+          cost = unit_price + buyout,
+          cost_g = cost / 10000)
+
+write_csv(auction_df, py$filename)
+
+# Add to database
+library(RSQLite)
+library(DBI)
+library(dbplyr)
+
+con <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
+dbWriteTable(con, py$tablename, auction_df)
+```
+
+```{r}
+# Check for any items in the newly scraped AH data that isn't in
+# the current database
+item_db <- tbl(con, "item_name")
+auction_df <- tbl(con, py$tablename)
+not_in_db_df <- anti_join(auction_df, item_db, by = "id") %>% 
+   collect()
+```
+
+```{r}
+
+id <- 1175
+token <- py$token
+# Format item info to request from API
+item_ids <- unique(not_in_db_df$id)
+
+# Helper function to chunk id vector
+createChunks <- function(x, elements.per.chunk){
+   # plain R version
+   split(x, rep(seq_along(x), each = elements.per.chunk)[seq_along(x)])
+
+}
+
+item_chunks <- createChunks(item_ids, 50)
+search_chunks <- map(item_chunks, function(.x) {
+   id_char <- paste(.x, collapse = "||")
+   glue("https://us.api.blizzard.com/data/wow/search/item?namespace=static-us&locale=en_US&orderby=id&&_pageSize=1000&id={id_char}&_&access_token={token}")
+})
+# Need this to be a Python list so I remove names (a named list becomes a python dict)
+search_chunks <- unname(search_chunks)
+```
+
+
+```{python}
+item_names = []
+
+for search_url in r['search_chunks']:
+   response = requests.get(search_url).json()
+   response_df = pandas.io.json.json_normalize(response, record_path = ['results'])
+   item_names.append(response_df)
+
+
+item_df = pd.concat(item_names, ignore_index = True, axis = 0, sort = True)
+
+```
+
+```{r}
+# Get Item classes index an
+new_item_df <- py$item_df %>% 
+   select(data.id, data.is_equippable, data.is_stackable, data.level, data.max_count,
+          data.media.id,  data.name.en_US,
+          data.purchase_price, data.required_level, data.sell_price) %>% 
+   rename_all(~stringr::str_replace(., "^data.", "")) %>% 
+   rename_at(.vars = vars(ends_with(".en_US")),
+             ~ sub('[.]en_US$', '', .))
+
+dbAppendTable(con, name = "item_name", value = new_item_df)
+dbDisconnect(con)
+
+```
