@@ -1,0 +1,86 @@
+---
+title: "WoW Auction House"
+author: "Jake Wittman"
+date: "8/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(reticulate)
+library(dbplyr)
+library(RSQLite)
+library(scales)
+library(lubridate)
+library(data.table)
+library(dtplyr)
+
+conflicted::conflict_prefer("wday", "lubridate")
+conflicted::conflict_prefer("filter", "dplyr")
+
+wowdb <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
+wow_tbls <-dbListTables(wowdb)
+item_db <- tbl(wowdb, "item_name")
+ah_tbls <- map(wow_tbls[str_detect(wow_tbls, pattern = "Malfurion")], 
+               function(.x) {
+                  tbl(wowdb, .x) %>% 
+                     left_join(., item_db, by = "id", copy = TRUE) %>% 
+                     collect() %>% 
+                     mutate(across(starts_with("collection"), ~as.numeric(.x)))
+               }) %>% 
+   bind_rows(.) 
+ah_tbls <- ah_tbls %>% 
+   # Engineer some features
+   mutate(
+      timestamp = make_datetime(
+         year = collection_year,
+         month = collection_month,
+         day = collection_day,
+         hour = collection_hour,
+         min = 5L,
+         tz = "US/Pacific"
+      ),
+      day_of_week = wday(timestamp, label = TRUE, abbr = TRUE),
+      weekend = case_when(day_of_week %in% c("Sat", "Sun") ~ 1,
+                          TRUE ~ 0)
+      ) 
+
+```
+
+```{r}
+ah_tbls %>% 
+   filter(str_detect(name, "Elethium Ore")) %>% 
+   group_by(id, timestamp) %>% 
+   filter(cost_g == min(cost_g, na.rm = TRUE)) %>% 
+   ggplot(aes(x = timestamp, y = cost_g)) +
+   geom_point() +
+   geom_smooth() +
+   facet_wrap(~name, scales = "free") +
+   scale_x_datetime(date_labels = "%H:00 (%m-%d)",
+                    date_breaks = "1 day") +
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 0.3))
+```
+
+```{r}
+# Let's build some models
+# Simple lagged time series model
+# Only get items that have at least 5 observations
+ah_tbls_sub <- ah_tbls %>% 
+   group_by(id) %>% 
+   count() %>%  # Count # of observations
+   filter(n >= 5) %>%  # Only items with > time values
+   semi_join(ah_tbls, ., by = "id") # Filter the original
+
+# Engineer the lags now
+ah_tbls_sub <- ah_tbls_sub %>% 
+   group_by(name) %>% 
+   arrange(name, timestamp) %>% 
+   mutate(cost_g_lag1 = lag(cost_g, n = 1, order_by = timestamp),
+          cost_g_lag2 = lag(cost_g, n = 2, order_by = timestamp),
+          cost_g_lag3 = lag(cost_g, n = 3, order_by = timestamp))
+
+library(lme4)
+ts_lag_mm <- lmer(cost_g ~ cost_g_lag1 + cost_g_lag2 + cost_g_lag3 + (1 | name),
+                 data = ah_tbls_sub) 
+```
+

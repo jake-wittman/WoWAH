@@ -1,0 +1,54 @@
+---
+title: "ch4"
+author: "Jake Wittman"
+date: "10/15/2021"
+output: html_document
+---
+
+```{r}
+library(feasts)
+library(tidyverse)
+```
+
+# Simple statistics
+
+```{r}
+tourism %>% 
+   features(Trips, list(mean = mean)) %>% 
+   arrange(mean)
+
+tourism %>% features(Trips, quantile)
+```
+
+# ACF features
+
+```{r}
+tourism %>% 
+   features(Trips, feat_acf)
+```
+
+# STL features
+
+A time series with a strong seasonal strength will have seasonal_strength close to 1, a weak is close to 0. Same with trend
+
+```{r}
+tourism %>%
+   features(Trips, feat_stl)
+
+tourism %>% 
+   features(Trips, feat_stl) %>% 
+   ggplot(aes(x = trend_strength, y = seasonal_strength_year, col = Purpose)) + 
+   geom_point() +
+   facet_wrap(vars(State))
+
+tourism %>%
+  features(Trips, feat_stl) %>%
+  filter(
+    seasonal_strength_year == max(seasonal_strength_year)
+  ) %>%
+  left_join(tourism, by = c("State", "Region", "Purpose")) %>%
+  ggplot(aes(x = Quarter, y = Trips)) +
+  geom_line() +
+  facet_grid(vars(State, Region, Purpose))
+```
+

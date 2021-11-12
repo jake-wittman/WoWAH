@@ -15,7 +15,7 @@ shorter_csv_files <- str_remove(shorter_csv_files, ".csv")
 
 con <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
 walk2(csv_list, shorter_csv_files, function(.x, .y) {
-   dbWriteTable(con, .y, .x)
+   dbWriteTable(con, .y, .x, overwrite = TRUE)
 })
 
 

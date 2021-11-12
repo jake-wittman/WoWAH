@@ -1,0 +1,292 @@
+---
+title: "Chapter 2"
+author: "Jake Wittman"
+date: "9/29/2021"
+output: html_document
+---
+```{r}
+library(fpp3)
+conflicted::conflict_prefer("year", "lubridate")
+```
+
+
+# Time series graphics 
+
+```{r}
+# Creating a tsibble
+y <- tsibble(
+   Year = 2015:2019,
+   Observation = c(123, 39, 78, 52, 110),
+   index = Year
+)
+```
+
+If a time series happens more than once per year, we use a time class function
+
+```{r}
+z <- tibble(
+   Month = c('2019 Jan', '2019 Feb', '2019 Mar', '2019 Apr', '2019 May'),
+   Observation = c(50, 23, 34, 30, 25)
+)
+
+z %>% 
+   mutate(Month = yearmonth(Month)) %>% as_tsibble(index = Month)
+```
+
+Other functions exist for different frequencies. For sub-daily, use as_datetime() or ymd_hms().
+
+Can have a tsibble that contains multiple time series. This tsibble is indexed by sex and length.
+```{r}
+olympic_running
+```
+
+May use this later
+```{r}
+PBS %>%
+  filter(ATC2 == "A10") %>%
+  select(Month, Concession, Type, Cost) %>%
+  summarise(TotalC = sum(Cost)) %>%
+  mutate(Cost = TotalC / 1e6) -> a10
+```
+
+# Time plots
+
+```{r}
+melsyd_economy <- ansett %>%
+  filter(Airports == "MEL-SYD", Class == "Economy") %>%
+  mutate(Passengers = Passengers/1000)
+autoplot(melsyd_economy, Passengers) +
+  labs(title = "Ansett airlines economy class",
+       subtitle = "Melbourne-Sydney",
+       y = "Passengers ('000)")
+```
+
+```{r}
+autoplot(a10, Cost) +
+  labs(y = "$ (millions)",
+       title = "Australian antidiabetic drug sales")
+```
+
+Describing time series
+A trend is a long-term increase or decrease in the data.
+A seasonal pattern is when a time series is affected by seasonal factors such as time of the year or day of the week.
+A cyclic pattern occurs when data rise or fall in a way that are not of a fixed frequency. These may be due to economic conditions or "business cycle"
+
+A seasonal plot
+```{r}
+a10 %>%
+  gg_season(Cost, labels = "both") +
+  labs(y = "$ (millions)",
+       title = "Seasonal plot: Antidiabetic drug sales") +
+  expand_limits(x = ymd(c("1972-12-28", "1973-12-04")))
+```
+
+Can specify period if there are multiple seasonalities
+```{r}
+vic_elec %>% gg_season(Demand, period = "day") +
+  theme(legend.position = "none") +
+  labs(y="MW", title="Electricity demand: Victoria")
+
+vic_elec %>% gg_season(Demand, period = "week") +
+  theme(legend.position = "none") +
+  labs(y="MW", title="Electricity demand: Victoria")
+
+vic_elec %>% gg_season(Demand, period = "year") +
+  labs(y="MW", title="Electricity demand: Victoria")
+```
+
+May wish to use a subseries plot instead. Blue line is the average
+```{r}
+a10 %>%
+  gg_subseries(Cost) +
+  labs(
+    y = "$ (millions)",
+    title = "Australian antidiabetic drug sales"
+  )
+```
+
+Maybe we'll see why a subseries plot is useful in this example? Its not the best for the previous
+```{r}
+holidays <- tourism %>%
+  filter(Purpose == "Holiday") %>%
+  group_by(State) %>%
+  summarise(Trips = sum(Trips))
+
+autoplot(holidays, Trips) +
+  labs(y = "Overnight trips ('000)",
+       title = "Australian domestic holidays")
+```
+
+A seasonal plot shows that different states haven't different amounts of tourism at different times of year
+```{r}
+gg_season(holidays, Trips) +
+  labs(y = "Overnight trips ('000)",
+       title = "Australian domestic holidays")
+```
+
+And the subseries plot
+```{r}
+holidays %>%
+  gg_subseries(Trips) +
+  labs(y = "Overnight trips ('000)",
+       title = "Australian domestic holidays")
+```
+
+May wish to plot scatterplots of two related time series. Here's electricity demand and temperature time serise
+
+```{r}
+vic_elec %>%
+  filter(year(Time) == 2014) %>%
+  autoplot(Demand) +
+  labs(y = "GW",
+       title = "Half-hourly electricity demand: Victoria")
+
+vic_elec %>%
+  filter(year(Time) == 2014) %>%
+  autoplot(Temperature) +
+  labs(
+    y = "Degrees Celsius",
+    title = "Half-hourly temperatures: Melbourne, Australia"
+  )
+```
+
+And their scatterplot 
+
+```{r}
+vic_elec %>%
+  filter(year(Time) == 2014) %>%
+  ggplot(aes(x = Temperature, y = Demand)) +
+  geom_point() +
+  labs(x = "Temperature (degrees Celsius)",
+       y = "Electricity demand (GW)")
+```
+
+# Lag plots
+
+HEre's quarterly Australian beer production. The horizontal axis shows lagged values of the time series and each graph is for a different lag k
+```{r}
+recent_production <- aus_production %>%
+  filter(year(Quarter) >= 2000)
+recent_production %>%
+  gg_lag(Beer, geom = "point") +
+  labs(x = "lag(Beer, k)")
+```
+
+# Autocorrelation
+
+```{r}
+recent_production %>%
+  ACF(Beer) %>%
+  autoplot() + labs(title="Australian beer production")
+```
+
+
+When data have a trend, the autocorrelations for small values tend to be large and positive and decrease as lags increase. If there is seasonality in the data, the autocorrelations are larger for the seasonal lags (the multiples of the seasonal period; e.g. every January). If both are present, you will see both. Here we see both trend and seasonality
+
+```{r}
+a10 %>%
+  ACF(Cost, lag_max = 48) %>%
+  autoplot() +
+  labs(title="Australian antidiabetic drug sales")
+```
+
+Time series with no autocorrelation are white noise
+
+
+```{r}
+set.seed(30)
+y <- tsibble(sample = 1:50, wn = rnorm(50), index = sample)
+y %>% autoplot(wn) + labs(title = "White noise", y = "")
+```
+
+```{r}
+y %>%
+  ACF(wn) %>%
+  autoplot() + labs(title = "White noise")
+```
+
+We would expect that 95% of the spikes in an ACF to lie within +/- (2/sqrt(T)), where T is the length of the time series. Around 5% of the spikes can be outside the line and still be considered white noise. 
+
+Let's look at some of these plots for my WoW data
+
+```{r}
+library(tidyverse)
+library(reticulate)
+library(dbplyr)
+library(RSQLite)
+library(scales)
+library(lubridate)
+library(data.table)
+library(dtplyr)
+
+conflicted::conflict_prefer("wday", "lubridate")
+conflicted::conflict_prefer("filter", "dplyr")
+
+wowdb <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
+wow_tbls <-dbListTables(wowdb)
+item_db <- tbl(wowdb, "item_name")
+ah_tbls <- map(wow_tbls[str_detect(wow_tbls, pattern = "Malfurion")], 
+               function(.x) {
+                  tbl(wowdb, .x) %>% 
+                     left_join(., item_db, by = "id", copy = TRUE) %>% 
+                     filter(name == "Widowbloom" | name == "Marrowroot") %>% 
+                     collect() %>% 
+                     mutate(across(starts_with("collection"), ~as.numeric(.x)))
+               }) %>% 
+   bind_rows(.) 
+ah_tbls <- ah_tbls %>% 
+   # Engineer some features
+   mutate(
+      timestamp = make_datetime(
+         year = collection_year,
+         month = collection_month,
+         day = collection_day,
+         hour = collection_hour,
+         min = 5L,
+         tz = "US/Pacific"
+      ),
+      date = lubridate::date(timestamp),
+      day_of_week = wday(timestamp, label = TRUE, abbr = TRUE),
+      weekend = case_when(day_of_week %in% c("Sat", "Sun") ~ 1,
+                          TRUE ~ 0)
+      ) %>% 
+  group_by(timestamp, name) %>% 
+  filter(cost_g == min(cost_g, na.rm = TRUE)) %>% 
+  slice_sample(n = 1)
+```
+
+Turning it into a tsibble
+
+```{r}
+ah_ts <- as_tsibble(ah_tbls,
+           key = name,
+           index = c(timestamp))
+```
+
+```{r}
+autoplot(ah_ts, .vars = cost_g)
+
+ah_ts %>% 
+  filter(name == "Widowbloom") %>% 
+  autoplot(cost_g)
+```
+
+```{r}
+ah_ts %>%
+  fill_gaps() %>% 
+  ACF(cost_g, lag_max = 48) %>% 
+  autoplot()
+```
+
+```{r}
+gg_lag(filter(ah_ts, name == "Marrowroot"), cost_g)
+ah_ts %>% 
+  fill_gaps() %>% 
+  gg_subseries(cost_g, period = "day")
+
+ah_ts %>% 
+  fill_gaps() %>% 
+  gg_season(cost_g, period = "week")
+```
+
+

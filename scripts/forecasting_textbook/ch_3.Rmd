@@ -1,0 +1,505 @@
+---
+title: "ch3"
+author: "Jake Wittman"
+date: "10/8/2021"
+output: html_document
+---
+
+```{r}
+library(fpp3)
+conflicted::conflict_prefer("year", "lubridate")
+conflicted::conflict_prefer("filter", "dplyr")
+```
+
+Time series decomposition
+
+# Calendar adjustments
+
+Monthly sales will differ just because there are a differnt number of days in a month. Instead, consider computing the average sales per day in each month to remove calendar variation.
+
+# Population adjustments
+
+Use per-capita adjustments if the data are affected by population change. For example, the number of hospital beds in a region over time is easier to understand as a per capita number. We can see this in the global_economy data
+
+```{r}
+global_economy %>% 
+   filter(Country == 'Australia') %>% 
+   autoplot(GDP/Population) +
+   labs(title = 'GDP per capita', y = '$US')
+
+global_economy %>% 
+   filter(Country == 'Australia') %>% 
+   autoplot(GDP) +
+   labs(title = 'GDP', y = '$US')
+```
+
+# Inflation adjustments
+
+To adjust for inflation, a price index is used. If z_t is the price index and y_t is the original price in year t, then x_t = y_t / z_t * z_2000 would give the adjusted price at year 2000 dollar values. 
+
+We can compare growth or decline of industries relative to a common price value. Let's look at the aggregate annual newspaper and book retail turnover from aus_retail and adjust the data for inflation using CPI from global_economy. Adjusting for inflation, we can see that the newspaper and book industry is declining and has been for much longer than the raw numbers suggest. The adjusted turnover is in 2010 Australian dollar because the CPI is 100 in 2010 in this data.
+
+```{r}
+print_retail <- aus_retail %>% 
+   filter(Industry == 'Newspaper and book retailing') %>% 
+   group_by(Industry) %>% 
+   index_by(Year = year(Month)) %>% 
+   summarise(Turnover = sum(Turnover))
+
+aus_economy <- global_economy %>% 
+   filter(Code == 'AUS')
+
+print_retail %>% 
+   left_join(aus_economy, by = "Year") %>% 
+   mutate(Adjusted_turnover = Turnover / CPI * 100) %>% 
+   pivot_longer(c(Turnover, Adjusted_turnover),
+                values_to = 'Turnover') %>% 
+   mutate(name = factor(name,
+                        levels = c('Turnover', 'Adjusted_turnover'))) %>% 
+   ggplot(aes(x = Year, y = Turnover)) + 
+   geom_line() +
+   facet_grid(name ~ ., scales = 'free_y') +
+   labs(title = 'Turnover: Australian print media industry', y = '$AU')
+```
+
+# Mathematical transformations
+
+If the data show variation that increases or decreases with the level of the series, then a transformation may be useful. Log transforms are especially useful because they change the scale to be multiplicative. These do not work for negative or 0 values though, so a box-cox transformation may be required. Must choose a value of $\lambda$ for the box-cox. $\lambda = 0$ uses the natural log $w_t = ln(y_t)$, where as other values of $\lambda$ use a power transformation. A good value of $\lambda$ is one that makes the size of the seasonal variation about the same across the whole series, as that makes the forecasting simpler. 
+
+Can use the `guerrero` feature to select a lambda for you
+
+```{r}
+lambda <- aus_production %>% 
+   features(Gas, features = guerrero) %>% 
+   pull(lambda_guerrero)
+
+aus_production %>% 
+   autoplot(box_cox(Gas, lambda)) +
+   labs(y = '',
+        title = latex2exp::TeX(paste0('Transformed gas production with $\\lambda$ = ', round(lambda, 2))))
+```
+
+# Time series components
+
+If we assume an additive decomposition then we can write
+
+$$ y_t = S_t + T_t + R_t $$
+
+where, $y_t$ is the data, $S_t$ is the seasonal component, $T_t$ is the trend-cycle component and $R_t$ is the remained, all at period $t$. A multipliciative decomposition replaces the $+$ with $x$. Additive is appropriate if the magnitude of the seasonal fluctuations, or the variation around the trend-cycle, does not vary with the level of the time series. When the  variation in the seasonal pattern or variation around the trend-cycle is proprotional to the level of the time series a multiplicative decomposition may be approrpiate; this is often the case in economic time series.
+
+Can also transform a multiplicative decomposition by first transforming data until variation is stable over time, then use an additive decomp. When a log transform is used this is equivalent to a multiplicative.
+
+$$ y_t = S_t x T_t x R_t == log y_t = log S_t + log T_t + log R_t $$
+
+Decompose the number of people employed in retail in the US since 1990.
+
+```{r}
+us_retail_employment <- us_employment %>% 
+   filter(year(Month) >= 1990, Title == 'Retail Trade') %>% 
+   select(-Series_ID)
+
+autoplot(us_retail_employment, Employed) +
+   labs(y = 'Persons (thousands)',
+        title = 'Total employment in US retail')
+```
+
+STL decomposition (discussed later)
+
+```{r}
+dcmp <- us_retail_employment %>% 
+   model(stl = STL(Employed))
+components(dcmp)
+```
+
+The trend column is overall movement of the series, ignoring any seasonality and random fluctuations
+
+```{r}
+components(dcmp) %>% 
+   as_tsibble() %>% 
+   autoplot(Employed, colour = 'gray') +
+   geom_line(aes(y = trend), colour = 'orange') +
+   labs(y = 'Persons (thousands)', title = 'Total employment in USA retail')
+```
+
+Can plot all the components in a single figure
+```{r}
+autoplot(components(dcmp))
+```
+
+# Seasonally adjusted data
+
+If the seasonal component is removed from the original data, the resulting values are "seasonally adjusted" data. For an aditive decomposition, the seasonally adjusted data are $y_t - S_t$, for the multiplicative data, it would be $y_t/S_t$
+
+Seasonally adjusted: 
+```{r}
+components(dcmp) %>%
+  as_tsibble() %>%
+  autoplot(Employed, colour = "gray") +
+  geom_line(aes(y=season_adjust), colour = "#0072B2") +
+  labs(y = "Persons (thousands)",
+       title = "Total employment in US retail")
+```
+
+Employment data are often seasonally adjusted. If variation due to season is not of primary interest, you should seasonally adjust.
+
+# Moving averages
+
+The classical method of time series d ecomposition is moving averages, and is the first step in a classical decomposition to estimate the trend-cycle.
+
+A moving average of order m is $\hat{T}_t = \frac{1}{m}\sum_{j = -k}^{k}y_{t+j}$, where $m = 2k+1$. That is, the estimate of the trend-cycle at time $t$ is obtained by averaging values of the time series within $k$ periods of $t$.  This is called an m-MA, meaning a moving average of order m. Consider exports of goods and services for Australia as a percentage of GDP.
+
+```{r}
+global_economy %>%
+  filter(Country == "Australia") %>%
+  autoplot(Exports) +
+  labs(y = "% of GDP", title = "Total Australian exports")
+```
+
+Can be computed with the slider package
+```{r}
+aus_exports <- global_economy %>%
+  filter(Country == "Australia") %>%
+  mutate(
+    `5-MA` = slider::slide_dbl(Exports, mean,
+                .before = 2, .after = 2, .complete = TRUE)
+  )
+aus_exports %>%
+  autoplot(Exports) +
+  geom_line(aes(y = `5-MA`), colour = "#D55E00") +
+  labs(y = "% of GDP",
+       title = "Total Australian exports") +
+  guides(colour = guide_legend(title = "series"))
+```
+
+Simple moving averages are of an odd order m. An even order would be non-symmetric about the observed year. Or one might apply an even-MA to another even-MA to make it symmetric
+
+```{r}
+beer <- aus_production %>%
+  filter(year(Quarter) >= 1992) %>%
+  select(Quarter, Beer)
+beer_ma <- beer %>%
+  mutate(
+    `4-MA` = slider::slide_dbl(Beer, mean,
+                .before = 1, .after = 2, .complete = TRUE),
+    `2x4-MA` = slider::slide_dbl(`4-MA`, mean,
+                .before = 1, .after = 0, .complete = TRUE)
+  )
+```
+
+The above is a 4-MA followed by a 2-MA. When a 2-MA follows even-MA, this is a centered moving average of order {even}. Odd-odd combinatinos of MA are also sometimes done.
+
+A common use of centered MA is to estimate the trend-cycle from quarterly seasonal data. When a 2x4-MA is applied to such data, each quarter of the year is given equal weight as the first and last terms apply to the same quarter in consecutive years. This averages out the seasonal variation and resulting values of $\hat{T}_t$ will have little or no seasonal variation left. If the seasonal period is even and of order m we might use a 2xm-MA, whereas if the period is odd and of order m we would use a m-MA. A 2x12-MA may be used to estimate the trend-cycle of monthly data with annual seasonality, while a 7-MA would be used to estimate the trend-cycle of daily data with weekly seasonality.
+
+```{r}
+us_retail_employment_ma <- us_retail_employment %>%
+  mutate(
+    `12-MA` = slider::slide_dbl(Employed, mean,
+                .before = 5, .after = 6, .complete = TRUE),
+    `2x12-MA` = slider::slide_dbl(`12-MA`, mean,
+                .before = 1, .after = 0, .complete = TRUE)
+  )
+us_retail_employment_ma %>%
+  autoplot(Employed, colour = "gray") +
+  geom_line(aes(y = `2x12-MA`), colour = "#D55E00") +
+  labs(y = "Persons (thousands)",
+       title = "Total employment in US retail")
+```
+
+Any other choice for m for the above besides 12 and multiples of 12 would have been 'contaminated' by seasonality, since the period of this is 12.
+
+Combinations of MA are weighted moving averages. For example, the 2x4-MA is equivalent to a 5-MA with weights given by [1/8, 1/4, 1/4, 1/4, 1/8]. A weighted MA can be written as $\hat{T}_t = \sum_{j=-k}^{k}a_jy_{t+j}$, where $k = (m-1)/2$ and the weights are given by $[a_{-k},...,a_k]$. The weights should sum to 1 and be symmetric. This produces better estimates because points further away from the focal point are given less weight.
+
+# Classical decomposition
+
+- Step 1: If m is an even number, compute the trend-cycle using a 2xm-MA. If m is odd, compute using a m-MA.
+- Step 2: Calculate teh detrended seris: $y_t - \hat{T}_t$
+- Step 3: To estimate the seasonal component for each season, average the detrended values for that season. For example, with monthly data, the seasonal component for March is the average of all the detrended March values in the data. Then adjust the values to ensure they add to 0. The seasonal component is then these values strung together and replicating the sequence for each year of data.
+- Step 4: The remainder is just $\hat{R_t} = y_t - \hat{T}_t - \hat{S}_t$
+
+See below
+```{r}
+us_retail_employment %>%
+  model(
+    classical_decomposition(Employed, type = "additive")
+  ) %>%
+  components() %>%
+  autoplot() +
+  labs(title = "Classical additive decomposition of total
+                  US retail employment")
+```
+
+A multiplicative decomposition is similar, but replaced with division instead of subtraction.
+
+While classical decomp is widely used, it is not recommended. Estimate of the trend cycle is unavailable for the first few and last few observations based on the window k. It also over smooths rapid rises and falls. It assumes seasonal component repeats from year to year, which may not be valid for longer time series. It is not robust to disruptions to the time series, like labor negotiations on flight passenger traffic.
+
+# Methods used by official agencies.
+
+They use methods like X-11 method or variants of it, or SEATS, or a combination. These methods only work for monthly or quarterly data though.
+
+The x-11 method provides estimates for trend-cycle across all observations and allows the seasonal component to vary. It also handles trading day variation, holiday effects, and effects of known predictors. It's robust to outliers and level shifts
+```{r}
+library(seasonal)
+x11_dcmp <- us_retail_employment %>%
+  model(x11 = X_13ARIMA_SEATS(Employed ~ x11())) %>%
+  components()
+autoplot(x11_dcmp) +
+  labs(title =
+    "Decomposition of total US retail employment using X-11.")
+```
+
+```{r}
+x11_dcmp %>%
+  ggplot(aes(x = Month)) +
+  geom_line(aes(y = Employed, colour = "Data")) +
+  geom_line(aes(y = season_adjust,
+                colour = "Seasonally Adjusted")) +
+  geom_line(aes(y = trend, colour = "Trend")) +
+  labs(y = "Persons (thousands)",
+       title = "Total employment in US retail") +
+  scale_colour_manual(
+    values = c("gray", "#0072B2", "#D55E00"),
+    breaks = c("Data", "Seasonally Adjusted", "Trend")
+  )
+```
+
+It's helpful to look at seasonal and a seasonal sub-series plots of the seasonal component to visualize the variation of the seasonal component over time.
+
+```{r}
+x11_dcmp %>%
+  gg_subseries(seasonal)
+```
+
+In this case, there are only small changes over time.
+
+Seats method: 
+
+```{r}
+seats_dcmp <- us_retail_employment %>%
+  model(seats = X_13ARIMA_SEATS(Employed ~ seats())) %>%
+  components()
+autoplot(seats_dcmp) +
+  labs(title =
+    "Decomposition of total US retail employment using SEATS")
+```
+
+# The STL decomp
+
+Several advantages over the previously mentioned. It will handle any type of seasonality. The seasonal component can vary over time and the rate of change can be controlled by user. Smoothness of trend-cycle can also be controlled by user. It can be robust to outliers. But it does not handle trading day or calendar variation automatically, and it only provides facilities for additive decompositions. Could use a box-cox transformation to get somewhere between additive and multiplicative decompositions.
+STL stands for Seasonal and Trend decomposition using Loess
+
+
+```{r}
+us_retail_employment %>%
+  model(
+    STL(Employed ~ trend(window = 3) +
+                   season(window = 7),
+    robust = TRUE)) %>%
+  components() %>%
+  autoplot()
+```
+
+The two main parameters to choose are the trend-cycle window trend(window = ?) and seasonal window seasonal(window = ?). The ycontrol how rapidly trend-cycle and seasonal components change. A smaller value allows for more rapid changes. Both values should be odd numbers.
+
+## Wow AH Decomp
+
+```{r}
+library(tidyverse)
+library(reticulate)
+library(dbplyr)
+library(RSQLite)
+library(scales)
+library(lubridate)
+library(data.table)
+library(dtplyr)
+
+conflicted::conflict_prefer("wday", "lubridate")
+conflicted::conflict_prefer("filter", "dplyr")
+
+wowdb <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
+wow_tbls <-dbListTables(wowdb)
+item_db <- tbl(wowdb, "item_name")
+ah_tbls <- map(wow_tbls[str_detect(wow_tbls, pattern = "Malfurion")], 
+               function(.x) {
+                  tbl(wowdb, .x) %>% 
+                     left_join(., item_db, by = "id", copy = TRUE) %>% 
+                     filter(name == "Widowbloom" | name == "Marrowroot") %>% 
+                     collect() %>% 
+                     mutate(across(starts_with("collection"), ~as.numeric(.x)))
+               }) %>% 
+   bind_rows(.) 
+ah_tbls <- ah_tbls %>% 
+   # Engineer some features
+   mutate(
+      timestamp = make_datetime(
+         year = collection_year,
+         month = collection_month,
+         day = collection_day,
+         hour = collection_hour,
+         min = 5L,
+         tz = "US/Pacific"
+      ),
+      date = lubridate::date(timestamp),
+      day_of_week = wday(timestamp, label = TRUE, abbr = TRUE),
+      weekend = case_when(day_of_week %in% c("Sat", "Sun") ~ 1,
+                          TRUE ~ 0)
+      ) %>% 
+  group_by(timestamp, name) %>% 
+  filter(cost_g == min(cost_g, na.rm = TRUE)) %>% 
+  slice_sample(n = 1)
+
+ah_ts <- as_tsibble(ah_tbls,
+           key = name,
+           index = c(timestamp))
+```
+
+```{r}
+conflicted::conflict_prefer("lag", "dplyr")
+noNA_ah_ts <- ah_ts %>%
+  filter(name == 'Widowbloom') %>% 
+  fill_gaps() %>% 
+  mutate(cost_g = case_when(is.na(cost_g) ~ lag(cost_g),
+                            TRUE ~ cost_g))
+noNA_ah_ts$cost_g[is.na(noNA_ah_ts$cost_g)] <- mean(ah_ts$cost_g, na.rm = TRUE)
+noNA_ah_ts %>% 
+  model(
+    STL(cost_g ~ trend(window = 3) +
+                   season(period = '1 day'),
+    robust = TRUE)) %>%
+  components() %>%
+  autoplot()
+```
+
+
+# Questions
+```{r}
+library(ggrepel)
+global_economy %>% 
+  autoplot(GDP/Population) +
+  theme(legend.position = 'none') +
+  geom_text_repel(aes(label = Country))
+```
+
+```{r}
+global_economy %>% 
+  filter(Country == 'United States') %>% 
+  autoplot(GDP/Population)
+
+aus_livestock %>% 
+  filter(str_detect(Animal, 'Bulls')) %>% 
+  filter(str_detect(State, 'Victoria')) %>% 
+  autoplot(log(Count))
+```
+
+```{r}
+vic_elec %>% 
+  autoplot(box_cox(Demand, 0.01))
+
+vic_elec %>% 
+  autoplot(Demand)
+```
+
+```{r}
+lambda <- aus_production %>% 
+  features(Gas, features = guerrero) %>%
+  pull(lambda_guerrero)
+aus_production %>% 
+  autoplot(box_cox(Gas, 0.1))
+```
+
+```{r}
+canadian_gas %>% 
+  autoplot(Volume)
+
+```
+
+```{r}
+set.seed(42069)
+my_series <- aus_retail %>%
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+
+my_series %>% 
+  autoplot()
+
+gg_season(my_series)
+gg_subseries(my_series)
+gg_lag(my_series)
+
+my_series %>% 
+  autoplot(log(Turnover))
+```
+
+```{r}
+lambda <- aus_production %>% 
+  features(Tobacco, guerrero) %>% 
+  pull(lambda_guerrero)
+# I think i probably wouldn't transform Tobacco - the variance doesn't seem to depend much
+# on the level of the trend
+aus_production %>% 
+  autoplot(box_cox(Tobacco, lambda))
+
+lambda <- ansett %>% 
+  filter(Class == 'Economy' & Airports == 'MEL-SYD') %>% 
+  features(Passengers, guerrero) %>% 
+  pull(lambda_guerrero)
+ansett %>% 
+  filter(Class == 'Economy' & Airports == 'MEL-SYD') %>% 
+  autoplot(box_cox(Passengers, lambda))
+
+lambda <- pedestrian %>% 
+  filter(Sensor == 'Southern Cross Station') %>% 
+  features(Count, guerrero) %>% 
+  pull(lambda_guerrero)
+pedestrian %>% 
+  filter(Sensor == 'Southern Cross Station') %>% 
+  autoplot(box_cox(Count, lambda))
+```
+
+
+```{r}
+gas <- tail(aus_production, 5*4) %>% select(Gas)
+autoplot(gas, Gas)
+
+gas %>% 
+  model(classical_decomposition(Gas, type = 'mult')) %>% 
+  components() %>% 
+  autoplot()
+
+gas %>% 
+  model(classical_decomposition(Gas, type = 'mult')) %>% 
+  components() %>% 
+  autoplot(season_adjust)
+
+outlier_gas <- gas
+outlier_gas$Gas[5] <- outlier_gas$Gas[5] + 300
+outlier_gas %>% 
+  model(classical_decomposition(Gas, type = 'mult')) %>% 
+  components() %>% 
+  autoplot(season_adjust)
+```
+
+
+```{r}
+my_series %>% 
+model(x11 = X_13ARIMA_SEATS(Turnover ~ x11())) %>%
+  components() %>% 
+  autoplot()
+gg_subseries(my_series)
+```
+
+
+```{r}
+canadian_gas %>% 
+  autoplot()
+
+canadian_gas %>% 
+  gg_subseries()
+
+gg_season(canadian_gas) +
+  scale_color_viridis_c()
+
+canadian_gas %>% 
+  model(STL(Volume ~ season(window = 11) + trend(window = 7))) %>% 
+  components() %>% 
+  autoplot()
+```
+

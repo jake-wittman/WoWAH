@@ -15,10 +15,14 @@ library(tidyverse)
 library(glue)
 library(googledrive)
 library(reticulate)
+library(lubridate)
+library(emayili)
 use_condaenv("F:\\Documents\\WoWAH\\renv\\python\\condaenvs\\renv-python\\python.exe")
 
+`%!in%` <- Negate(`%in%`)
 
-source("F:/Documents/WoWAH/data/keys.R")
+client_id <- Sys.getenv('client_id')
+client_secret <- Sys.getenv('client_secret')
 
 ```
 
@@ -43,6 +47,8 @@ def get_malfurion(search):
    return response.json()["auctions"]
 ```
 
+### Set up API call
+
 ```{python}
 response = create_access_token(r['client_id'], r['client_secret'])
 token = response['access_token']
@@ -54,6 +60,8 @@ id <- 1175
 token <- py$token
 search <- glue("https://us.api.blizzard.com/data/wow/connected-realm/{id}/auctions?namespace=dynamic-us&locale=en_US&access_token={token}")
 ```
+
+### Get the data
 
 ```{python}
 auction_data = get_malfurion(r['search'])
@@ -73,6 +81,8 @@ tablename = datetime.now().strftime('Malfurion_NA-%Y-%m-%d-%H-%M')
 auction_data.to_csv(filename, index = False)
 ```
 
+### Clean the data
+ 
 ```{r}
 # Read the data into R to clean it a bit more (since I'm less good at cleaning)
 # in python
@@ -89,12 +99,14 @@ write_csv(auction_df, py$filename)
 
 # Add to database
 library(RSQLite)
-library(DBI)
 library(dbplyr)
 
 con <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
-dbWriteTable(con, py$tablename, auction_df)
+#dbWriteTable(con, py$tablename, auction_df)
+file.remove(py$filename) # delete the csv file once it is in the database.
 ```
+
+# Update database
 
 ```{r}
 # Check for any items in the newly scraped AH data that isn't in
@@ -103,10 +115,6 @@ item_db <- tbl(con, "item_name")
 auction_df <- tbl(con, py$tablename)
 not_in_db_df <- anti_join(auction_df, item_db, by = "id") %>% 
    collect()
-```
-
-```{r}
-
 id <- 1175
 token <- py$token
 # Format item info to request from API
@@ -130,6 +138,7 @@ search_chunks <- unname(search_chunks)
 
 
 ```{python}
+import pandas
 item_names = []
 
 for search_url in r['search_chunks']:
@@ -153,6 +162,81 @@ new_item_df <- py$item_df %>%
              ~ sub('[.]en_US$', '', .))
 
 dbAppendTable(con, name = "item_name", value = new_item_df)
+```
+
+# Remove excess data
+
+Had this turned on, but I'm gonna turn it off again for a while.
+
+```{r, eval = FALSE}
+# I don't need to keep all the data, let's keep a month's worth
+table_list <- data.frame(table_list = dbListTables(con))
+table_list <- filter(table_list, table_list %!in% c("item_name", "item_db"))
+table_list$date_times <-
+   str_extract(table_list$table_list,
+               "[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}")
+table_list$date_times <- ymd_hm(table_list$date_times)
+# Just in case the tables aren't in order for date time
+table_list$index <- 1:nrow(table_list)
+table_list <- arrange(table_list, desc(date_times))
+keep_tables <- slice(table_list, 1:672)
+remove_tables <- table_list[table_list$index %!in% keep_tables$index, ]
+remove_tables <- remove_tables$table_list
+
+map(remove_tables, ~dbRemoveTable(con, .x))
 dbDisconnect(con)
 
 ```
+
+# Email alerts for particular items
+
+```{r}
+watched_items <- c('Elethium Ore', 'Widowbloom')
+watched_item_df <- auction_df %>% 
+   left_join(item_db, by = 'id', copy = TRUE) %>% 
+   filter(name %in% watched_items) %>% 
+   select(name, cost_g, quantity) %>% 
+   group_by(name, cost_g) %>% 
+   summarise(quantity = sum(quantity, na.rm = TRUE)) %>% 
+   collect()
+
+email_items <- watched_item_df %>% 
+   group_by(name) %>% 
+   summarise(min_cost = min(cost_g)) %>%
+   left_join(., watched_item_df, by = c('name', 'min_cost' = 'cost_g')) %>% 
+   mutate(buy = case_when(name == 'Elethium Ore' & min_cost < 60 ~ 1,
+                          name == 'Widowbloom' & min_cost < 16 ~ 1,
+                          TRUE ~ 0)) %>% 
+   filter(buy == 1)
+items_to_buy <- paste0(email_items$name, ": ", email_items$quantity, collapse = ", ")
+names(items_to_buy) <- 'items_to_buy'
+# Set up text to send the giver their assigned gift recipient
+if (nrow(email_items) > 0) {
+body <- "Dear Jake,
+
+<p>Consider purchasing the following items:
+<br> {items_to_buy}
+
+"
+
+# Set up email
+email <- envelope()
+email <- email %>% 
+   from("wittman.secret.santa@gmail.com") %>% 
+   to('wittja01@gmail.com')
+
+email <- email %>% 
+   subject(paste0('WoW AH ', Sys.time()))
+
+email <- email %>% 
+   html(glue_data(items_to_buy, body))
+
+
+smtp <- server(host = "smtp.gmail.com",
+               port = 587,
+               username = "wittman.secret.santa@gmail.com",
+               password = "znbsqeduqaclxecj")
+smtp(email, verbose = TRUE)
+}
+```
+

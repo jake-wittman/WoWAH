@@ -33,3 +33,5 @@ keys.R
 
 data/*.csv
 data/*.sqlite
+
+.Renviron
