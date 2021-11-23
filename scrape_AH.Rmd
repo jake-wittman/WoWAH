@@ -21,8 +21,7 @@ use_condaenv("F:\\Documents\\WoWAH\\renv\\python\\condaenvs\\renv-python\\python
 
 `%!in%` <- Negate(`%in%`)
 
-client_id <- Sys.getenv('client_id')
-client_secret <- Sys.getenv('client_secret')
+source('data/keys.R')
 
 ```
 
@@ -102,7 +101,7 @@ library(RSQLite)
 library(dbplyr)
 
 con <- dbConnect(RSQLite::SQLite(), "data/WoWAH_database.sqlite")
-#dbWriteTable(con, py$tablename, auction_df)
+dbWriteTable(con, py$tablename, auction_df)
 file.remove(py$filename) # delete the csv file once it is in the database.
 ```
 
@@ -190,7 +189,9 @@ dbDisconnect(con)
 
 # Email alerts for particular items
 
-```{r}
+Turning this off for now. Apparently I violated gmail terms of service *crying laughing emoji*. I'll figure out something else later.
+
+```{r, eval = FALSE}
 watched_items <- c('Elethium Ore', 'Widowbloom')
 watched_item_df <- auction_df %>% 
    left_join(item_db, by = 'id', copy = TRUE) %>% 
