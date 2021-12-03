@@ -35,3 +35,5 @@ data/*.csv
 data/*.sqlite
 
 .Renviron
+
+WoWAH/data/*
