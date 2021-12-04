@@ -236,7 +236,7 @@ email <- email %>%
 smtp <- server(host = "smtp.gmail.com",
                port = 587,
                username = "wittman.secret.santa@gmail.com",
-               password = "znbsqeduqaclxecj")
+               password = app_password)
 smtp(email, verbose = TRUE)
 }
 ```
